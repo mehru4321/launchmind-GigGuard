@@ -1,0 +1,5 @@
+google-generativeai
+slack-sdk
+sendgrid
+requests
+python-dotenv

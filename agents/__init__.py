@@ -1,0 +1,1 @@
+# LaunchMind GigGuard — Agent Package
