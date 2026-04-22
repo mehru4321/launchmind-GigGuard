@@ -1,0 +1,216 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GigGuard - Your Freelancer Toolkit</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+            color: #333;
+            line-height: 1.6;
+        }
+        .container {
+            width: 90%;
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 20px 0;
+        }
+        header {
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 50px 0;
+            text-align: center;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 3em;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+        }
+        header p {
+            font-size: 1.3em;
+            max-width: 700px;
+            margin: 0 auto;
+            opacity: 0.9;
+        }
+        .cta-button {
+            display: inline-block;
+            background-color: #1abc9c;
+            color: #ffffff;
+            padding: 15px 30px;
+            text-decoration: none;
+            font-size: 1.2em;
+            border-radius: 5px;
+            margin-top: 30px;
+            transition: background-color 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .cta-button:hover {
+            background-color: #16a085;
+        }
+        section {
+            padding: 60px 0;
+            text-align: center;
+        }
+        section h2 {
+            font-size: 2.5em;
+            margin-bottom: 30px;
+            color: #2c3e50;
+        }
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            text-align: left;
+        }
+        .feature-item {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .feature-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        }
+        .feature-item h3 {
+            margin-top: 0;
+            color: #1abc9c;
+            font-size: 1.5em;
+            margin-bottom: 15px;
+        }
+        .persona-section {
+            background-color: #ecf0f1;
+        }
+        .persona-item {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        .persona-item h3 {
+            color: #2c3e50;
+            margin-top: 0;
+            font-size: 1.8em;
+            margin-bottom: 10px;
+        }
+        .persona-item p {
+            font-style: italic;
+            color: #555;
+            margin-bottom: 0;
+        }
+        footer {
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            text-align: center;
+            padding: 30px 0;
+            font-size: 0.9em;
+        }
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 2.5em;
+            }
+            header p {
+                font-size: 1.1em;
+            }
+            .container {
+                width: 95%;
+            }
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        @media (max-width: 480px) {
+            header h1 {
+                font-size: 2em;
+            }
+            .cta-button {
+                font-size: 1em;
+                padding: 12px 25px;
+            }
+            section h2 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>GigGuard</h1>
+            <p>Your freelancer toolkit to effortlessly track project deadlines and manage invoices, ensuring you get paid on time without the manual follow-up.</p>
+            <a href="#trial" class="cta-button">Start Free Trial</a>
+        </div>
+    </header>
+
+    <section id="personas">
+        <div class="container">
+            <h2>Built for Freelancers Like You</h2>
+            <div class="persona-item">
+                <h3>Amelia Chen - Freelance Graphic Designer</h3>
+                <p>Juggling multiple clients, Amelia often loses track of invoices, resulting in an estimated loss of $800-$1200 per quarter due to overdue payments and missed follow-ups.</p>
+            </div>
+            <div class="persona-item">
+                <h3>Ben Carter - Independent Software Developer</h3>
+                <p>Focused on coding, Ben has missed critical project deadlines due to calendar mismanagements, leading to strained client relationships.</p>
+            </div>
+            <div class="persona-item">
+                <h3>Sofia Rodriguez - Content Writer</h3>
+                <p>Sofia spends 3-4 hours monthly on manual invoice tracking and reminders, time she could be using to grow her business.</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="features">
+        <div class="container">
+            <h2>Features Designed for Your Success</h2>
+            <div class="features-grid">
+                <div class="feature-item">
+                    <h3>Centralized Dashboard</h3>
+                    <p>A single, intuitive dashboard displaying an overview of all invoices with clear status indicators (Sent, Viewed, Paid, Overdue). Quickly see outstanding amounts and upcoming payments.</p>
+                </div>
+                <div class="feature-item">
+                    <h3>Automated Payment Reminders</h3>
+                    <p>Configurable automated email sequences for payment reminders. Set days before/after due dates to send reminders and customize email content.</p>
+                </div>
+                <div class="feature-item">
+                    <h3>Deadline Calendar</h3>
+                    <p>A visual calendar displaying all project deadlines. Input deadlines manually or associate them with invoices, using colored markers for status or urgency.</p>
+                </div>
+                <div class="feature-item">
+                    <h3>Invoice Creation & Tracking</h3>
+                    <p>Create and send professional invoices directly from GigGuard. Each invoice has a unique tracking link for clients to view its status.</p>
+                </div>
+                <div class="feature-item">
+                    <h3>Customizable Email Templates</h3>
+                    <p>Pre-written, polite email templates for payment reminders that you can edit to match your brand voice. Includes placeholders for client details.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="trial" style="background-color: #e0f7fa;">
+        <div class="container">
+            <h2>Ready to Streamline Your Freelance Business?</h2>
+            <p>Stop chasing payments and missing deadlines. GigGuard helps you stay organized and get paid faster.</p>
+            <a href="#" class="cta-button">Start Free Trial</a>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2023 GigGuard. All rights reserved.</p>
+        </div>
+    </footer>
+</body>
+</html>
+```
