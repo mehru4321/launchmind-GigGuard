@@ -1,21 +1,23 @@
 """
-LaunchMind GigGuard — QA / Reviewer Agent
-Reviews Engineer's HTML and Marketing's copy, posts GitHub PR comments,
+LaunchMind GigGuard - QA / Reviewer Agent
+Reviews Engineer HTML and Marketing copy, posts GitHub review comments,
 and sends a pass/fail verdict to the CEO.
 """
 
-import os
 import json
+import os
+import re
+
 import requests
-import google.generativeai as genai
 from dotenv import load_dotenv
 
+from llm_helper import call_llm_json
+
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_OWNER = os.getenv("GITHUB_REPO_OWNER", "mehru4321")
-GITHUB_REPO = os.getenv("GITHUB_REPO_NAME", "launchmind-GigGuard")
+GITHUB_OWNER = os.getenv("GITHUB_REPO_OWNER")
+GITHUB_REPO = os.getenv("GITHUB_REPO_NAME")
 GITHUB_API = "https://api.github.com"
 GITHUB_HEADERS = {
     "Authorization": f"token {GITHUB_TOKEN}",
@@ -25,251 +27,360 @@ GITHUB_HEADERS = {
 
 
 class QAAgent:
-    """
-    The QA agent reviews the Engineer's HTML landing page and the
-    Marketing agent's copy. It posts PR review comments on GitHub
-    and sends a structured pass/fail report to the CEO.
-    """
+    """The QA agent reviews the landing page and marketing copy against the spec."""
 
     def __init__(self, message_bus):
         self.name = "qa"
         self.bus = message_bus
-        self.model = genai.GenerativeModel("gemini-2.0-flash")
 
-    def run(self, engineer_output: dict, marketing_output: dict, product_spec: dict):
-        """
-        Main execution: review HTML and marketing copy, post PR comments, send verdict.
-
-        Args:
-            engineer_output: The engineer agent's result payload
-            marketing_output: The marketing agent's result payload
-            product_spec: The original product spec for comparison
-        """
-        print(f"\n🔍 [QA AGENT] Starting review...")
+    def run(
+        self,
+        engineer_output: dict,
+        marketing_output: dict,
+        product_spec: dict,
+        review_scope: str = "full",
+        previous_html_review: dict | None = None,
+        previous_marketing_review: dict | None = None,
+    ):
+        print("\n🔍 [QA AGENT] Starting review...")
 
         html_content = engineer_output.get("html_content", "")
         pr_url = engineer_output.get("github_pr_url", "")
-        marketing_copy = marketing_output
 
-        # 1. Review HTML landing page
-        html_review = self._review_html(html_content, product_spec)
-        print(f"📝 [QA AGENT] HTML review complete — verdict: {html_review.get('verdict', 'unknown')}")
+        if not html_content or not pr_url or marketing_output.get("status") != "completed":
+            failure_issues = []
+            if not html_content:
+                failure_issues.append("Engineer output is missing HTML content.")
+            if not pr_url:
+                failure_issues.append("Engineer output is missing a GitHub PR URL.")
+            if marketing_output.get("status") != "completed":
+                failure_issues.append("Marketing output is incomplete.")
+            payload = {
+                "status": "review_complete",
+                "overall_verdict": "fail",
+                "html_review": {
+                    "verdict": "fail",
+                    "score": 0,
+                    "issues": failure_issues,
+                    "strengths": [],
+                    "suggestions": ["Complete the required engineering and marketing outputs before QA review."],
+                },
+                "marketing_review": {
+                    "verdict": "fail",
+                    "score": 0,
+                    "issues": failure_issues,
+                    "strengths": [],
+                    "suggestions": ["Complete the required engineering and marketing outputs before QA review."],
+                },
+                "issues": failure_issues,
+                "summary": f"QA review could not proceed. Found {len(failure_issues)} blocking issue(s).",
+            }
+            self._send_report(payload)
+            return
 
-        # 2. Review marketing copy
-        marketing_review = self._review_marketing(marketing_copy, product_spec)
-        print(f"📝 [QA AGENT] Marketing review complete — verdict: {marketing_review.get('verdict', 'unknown')}")
+        html_content = self._clean_html(html_content)
 
-        # 3. Post review comments on GitHub PR
+        html_review = previous_html_review or self._not_reviewed_payload("HTML review was skipped.")
+        marketing_review = previous_marketing_review or self._not_reviewed_payload("Marketing review was skipped.")
+
+        if review_scope in ("full", "html_only"):
+            html_review = self._review_html(html_content, product_spec)
+            if not html_review:
+                html_review = {
+                    "verdict": "fail",
+                    "score": 0,
+                    "issues": ["QA could not review the HTML because the LLM review step failed."],
+                    "strengths": [],
+                    "suggestions": ["Retry the HTML QA review after the LLM dependency recovers."],
+                }
+            html_review = self._apply_deterministic_html_checks(html_review, html_content, product_spec)
+
+        if review_scope in ("full", "marketing_only"):
+            marketing_review = self._review_marketing(marketing_output, product_spec)
+            if not marketing_review:
+                marketing_review = {
+                    "verdict": "fail",
+                    "score": 0,
+                    "issues": ["QA could not review the marketing copy because the LLM review step failed."],
+                    "strengths": [],
+                    "suggestions": ["Retry the marketing QA review after the LLM dependency recovers."],
+                }
+
+        print(f"📝 [QA AGENT] HTML review complete - verdict: {html_review.get('verdict', 'unknown')}")
+        print(f"📝 [QA AGENT] Marketing review complete - verdict: {marketing_review.get('verdict', 'unknown')}")
+
         if pr_url:
             self._post_pr_comments(pr_url, html_review, marketing_review)
-            print(f"💬 [QA AGENT] Review comments posted on GitHub PR.")
 
-        # 4. Determine overall verdict
         overall_verdict = "pass"
         if html_review.get("verdict") == "fail" or marketing_review.get("verdict") == "fail":
             overall_verdict = "fail"
 
-        # 5. Send structured review report to CEO
         all_issues = html_review.get("issues", []) + marketing_review.get("issues", [])
-
-        self.bus.send(
-            from_agent=self.name,
-            to_agent="ceo",
-            message_type="result",
-            payload={
-                "status": "review_complete",
-                "overall_verdict": overall_verdict,
-                "html_review": html_review,
-                "marketing_review": marketing_review,
-                "issues": all_issues,
-                "summary": f"QA review complete. Overall verdict: {overall_verdict}. Found {len(all_issues)} issue(s).",
-            },
-        )
-
-        print(f"📤 [QA AGENT] Review report sent to CEO — verdict: {overall_verdict}")
+        payload = {
+            "status": "review_complete",
+            "overall_verdict": overall_verdict,
+            "html_review": html_review,
+            "marketing_review": marketing_review,
+            "issues": all_issues,
+            "summary": (
+                f"QA review complete ({review_scope}). Overall verdict: {overall_verdict}. "
+                f"Found {len(all_issues)} issue(s)."
+            ),
+        }
+        self._send_report(payload)
 
     def _review_html(self, html_content: str, product_spec: dict) -> dict:
-        """Use Gemini to review the HTML landing page against the product spec."""
-        # Truncate HTML if too long for the prompt
-        html_preview = html_content[:4000] if len(html_content) > 4000 else html_content
-
         prompt = f"""You are a QA reviewer. Review this HTML landing page against the product spec.
 
 PRODUCT SPEC:
 {json.dumps(product_spec, indent=2)}
 
 HTML LANDING PAGE:
-{html_preview}
+{html_content}
 
 Check:
 1. Does the headline match the value proposition?
 2. Are all 5 features from the spec mentioned?
-3. Are the personas/pain points referenced?
-4. Is there a clear call-to-action button?
-5. Is the HTML valid and well-structured?
+3. Are the personas or their pain points referenced?
+4. Is there a clear CTA button?
+5. Is the HTML well-structured?
 
-Respond with ONLY valid JSON (no markdown fences):
+Respond with ONLY valid JSON:
 {{
     "verdict": "pass" or "fail",
-    "score": 1-10,
-    "issues": ["issue 1 description", "issue 2 description"],
-    "strengths": ["strength 1", "strength 2"],
-    "suggestions": ["suggestion 1", "suggestion 2"]
+    "score": 1,
+    "issues": ["issue"],
+    "strengths": ["strength"],
+    "suggestions": ["suggestion"]
 }}"""
-
-        try:
-            response = self.model.generate_content(prompt)
-            text = response.text.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1]
-            if text.endswith("```"):
-                text = text.rsplit("```", 1)[0]
-            if text.startswith("json"):
-                text = text[4:]
-            return json.loads(text.strip())
-        except Exception as e:
-            print(f"❌ [QA AGENT] HTML review error: {e}")
-            return {"verdict": "pass", "score": 7, "issues": [], "strengths": [], "suggestions": []}
+        return call_llm_json(prompt, agent_name=self.name)
 
     def _review_marketing(self, marketing_output: dict, product_spec: dict) -> dict:
-        """Use Gemini to review the marketing copy."""
         prompt = f"""You are a QA reviewer. Review this marketing content against the product spec.
 
 PRODUCT SPEC:
 {json.dumps(product_spec, indent=2)}
 
 MARKETING CONTENT:
-- Tagline: {marketing_output.get('tagline', 'N/A')}
-- Description: {marketing_output.get('product_description', 'N/A')}
-- Email subject: {marketing_output.get('cold_email', {}).get('subject', 'N/A')}
-- Email body: {marketing_output.get('cold_email', {}).get('body', 'N/A')[:500]}
+- Tagline: {marketing_output.get("tagline", "")}
+- Description: {marketing_output.get("product_description", "")}
+- Email subject: {marketing_output.get("cold_email", {}).get("subject", "")}
+- Email body: {marketing_output.get("cold_email", {}).get("body", "")[:1000]}
 
 Check:
 1. Is the tagline under 10 words and compelling?
 2. Does the description match the value proposition?
-3. Does the cold email have a clear call to action?
-4. Is the tone professional and appropriate?
+3. Does the cold email have a clear CTA?
+4. Is the tone appropriate?
 
-Respond with ONLY valid JSON (no markdown fences):
+Respond with ONLY valid JSON:
 {{
     "verdict": "pass" or "fail",
-    "score": 1-10,
-    "issues": ["issue 1 description", "issue 2 description"],
-    "strengths": ["strength 1", "strength 2"],
-    "suggestions": ["suggestion 1", "suggestion 2"]
+    "score": 1,
+    "issues": ["issue"],
+    "strengths": ["strength"],
+    "suggestions": ["suggestion"]
 }}"""
-
-        try:
-            response = self.model.generate_content(prompt)
-            text = response.text.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1]
-            if text.endswith("```"):
-                text = text.rsplit("```", 1)[0]
-            if text.startswith("json"):
-                text = text[4:]
-            return json.loads(text.strip())
-        except Exception as e:
-            print(f"❌ [QA AGENT] Marketing review error: {e}")
-            return {"verdict": "pass", "score": 7, "issues": [], "strengths": [], "suggestions": []}
+        return call_llm_json(prompt, agent_name=self.name)
 
     def _post_pr_comments(self, pr_url: str, html_review: dict, marketing_review: dict):
-        """Post review comments on the GitHub PR."""
         try:
-            # Extract PR number from URL
             pr_number = pr_url.rstrip("/").split("/")[-1]
-
-            # Post a general review comment
-            comment_body = f"""## 🔍 QA Agent Review
+            comment_body = f"""## QA Agent Review
 
 ### HTML Landing Page Review
-- **Verdict:** {html_review.get('verdict', 'N/A').upper()}
-- **Score:** {html_review.get('score', 'N/A')}/10
+- Verdict: {html_review.get("verdict", "N/A").upper()}
+- Score: {html_review.get("score", "N/A")}/10
 
-**Strengths:**
-{self._format_list(html_review.get('strengths', []))}
+Issues:
+{self._format_list(html_review.get("issues", []))}
 
-**Issues:**
-{self._format_list(html_review.get('issues', []))}
-
-**Suggestions:**
-{self._format_list(html_review.get('suggestions', []))}
-
----
+Suggestions:
+{self._format_list(html_review.get("suggestions", []))}
 
 ### Marketing Copy Review
-- **Verdict:** {marketing_review.get('verdict', 'N/A').upper()}
-- **Score:** {marketing_review.get('score', 'N/A')}/10
+- Verdict: {marketing_review.get("verdict", "N/A").upper()}
+- Score: {marketing_review.get("score", "N/A")}/10
 
-**Strengths:**
-{self._format_list(marketing_review.get('strengths', []))}
+Issues:
+{self._format_list(marketing_review.get("issues", []))}
 
-**Issues:**
-{self._format_list(marketing_review.get('issues', []))}
+Suggestions:
+{self._format_list(marketing_review.get("suggestions", []))}
+"""
+            issue_comment_url = f"{GITHUB_API}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/issues/{pr_number}/comments"
+            requests.post(
+                issue_comment_url,
+                headers=GITHUB_HEADERS,
+                json={"body": comment_body},
+                timeout=30,
+            )
 
-**Suggestions:**
-{self._format_list(marketing_review.get('suggestions', []))}
+            files_url = f"{GITHUB_API}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/pulls/{pr_number}/files"
+            files_resp = requests.get(files_url, headers=GITHUB_HEADERS, timeout=30)
+            if files_resp.status_code != 200:
+                return
 
----
-*Reviewed by QA Agent 🤖*"""
+            changed_files = files_resp.json()
+            if not any(file_info.get("filename") == "index.html" for file_info in changed_files):
+                return
 
-            url = f"{GITHUB_API}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/issues/{pr_number}/comments"
-            data = {"body": comment_body}
-            resp = requests.post(url, headers=GITHUB_HEADERS, json=data)
+            pr_info_url = f"{GITHUB_API}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/pulls/{pr_number}"
+            pr_resp = requests.get(pr_info_url, headers=GITHUB_HEADERS, timeout=30)
+            if pr_resp.status_code != 200:
+                return
 
-            if resp.status_code == 201:
-                print(f"✅ [QA AGENT] Review comment posted on PR #{pr_number}")
-            else:
-                print(f"⚠️  [QA AGENT] Failed to post PR comment: {resp.status_code}")
+            commit_sha = pr_resp.json()["head"]["sha"]
+            suggestions = html_review.get("suggestions", []) or ["Tighten the hero copy to match the value proposition."]
+            review_data = {
+                "commit_id": commit_sha,
+                "body": "QA Agent automated review",
+                "event": "COMMENT",
+                "comments": [
+                    {
+                        "body": f"QA check: HTML verdict is {html_review.get('verdict', 'N/A').upper()}.",
+                        "path": "index.html",
+                        "line": 1,
+                        "side": "RIGHT",
+                    },
+                    {
+                        "body": f"Suggestion: {suggestions[0]}",
+                        "path": "index.html",
+                        "line": 5,
+                        "side": "RIGHT",
+                    },
+                ],
+            }
+            review_url = f"{GITHUB_API}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/pulls/{pr_number}/reviews"
+            requests.post(review_url, headers=GITHUB_HEADERS, json=review_data, timeout=30)
+            print("💬 [QA AGENT] Review comments posted on GitHub PR.")
+        except Exception as exc:
+            print(f"❌ [QA AGENT] PR comment error: {exc}")
 
-            # Post an inline review comment on the HTML file
-            # Get the list of files in the PR
-            url = f"{GITHUB_API}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/pulls/{pr_number}/files"
-            resp = requests.get(url, headers=GITHUB_HEADERS)
-            if resp.status_code == 200:
-                files = resp.json()
-                for f in files:
-                    if f["filename"] == "index.html":
-                        # Post inline comment on index.html
-                        # Get the latest commit SHA on the PR
-                        pr_info_url = f"{GITHUB_API}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/pulls/{pr_number}"
-                        pr_resp = requests.get(pr_info_url, headers=GITHUB_HEADERS)
-                        if pr_resp.status_code == 200:
-                            commit_sha = pr_resp.json()["head"]["sha"]
-                            
-                            inline_comments = [
-                                {
-                                    "body": f"🔍 HTML Quality: {html_review.get('verdict', 'N/A').upper()} — Score: {html_review.get('score', 'N/A')}/10",
-                                    "path": "index.html",
-                                    "line": 1,
-                                    "side": "RIGHT",
-                                },
-                                {
-                                    "body": f"💡 Suggestion: {html_review.get('suggestions', ['No suggestions'])[0]}",
-                                    "path": "index.html",
-                                    "line": 5,
-                                    "side": "RIGHT",
-                                },
-                            ]
-
-                            review_url = f"{GITHUB_API}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/pulls/{pr_number}/reviews"
-                            review_data = {
-                                "commit_id": commit_sha,
-                                "body": "QA Agent automated review",
-                                "event": "COMMENT",
-                                "comments": inline_comments,
-                            }
-                            review_resp = requests.post(review_url, headers=GITHUB_HEADERS, json=review_data)
-                            if review_resp.status_code == 200:
-                                print(f"✅ [QA AGENT] Inline review comments posted on index.html")
-                            else:
-                                print(f"⚠️  [QA AGENT] Inline comments failed: {review_resp.status_code} — {review_resp.text[:200]}")
-
-        except Exception as e:
-            print(f"❌ [QA AGENT] PR comment error: {e}")
+    def _send_report(self, payload: dict):
+        self.bus.send(
+            from_agent=self.name,
+            to_agent="ceo",
+            message_type="result",
+            payload=payload,
+        )
+        print(f"📤 [QA AGENT] Review report sent to CEO - verdict: {payload.get('overall_verdict', 'fail')}")
 
     def _format_list(self, items: list) -> str:
-        """Format a list of strings as markdown bullet points."""
         if not items:
             return "- None"
         return "\n".join(f"- {item}" for item in items)
+
+    def _not_reviewed_payload(self, reason: str) -> dict:
+        return {
+            "verdict": "pass",
+            "score": 10,
+            "issues": [],
+            "strengths": [reason],
+            "suggestions": [],
+        }
+
+    def _clean_html(self, html_content: str) -> str:
+        cleaned = html_content.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned.rsplit("```", 1)[0]
+        if cleaned.lower().startswith("html"):
+            cleaned = cleaned[4:]
+        return cleaned.strip()
+
+    def _apply_deterministic_html_checks(self, html_review: dict, html_content: str, product_spec: dict) -> dict:
+        reviewed = dict(html_review)
+        reviewed.setdefault("issues", [])
+        reviewed.setdefault("strengths", [])
+        reviewed.setdefault("suggestions", [])
+
+        html_lower = html_content.lower()
+        missing_features = [
+            feature.get("name", "")
+            for feature in product_spec.get("features", [])
+            if feature.get("name") and feature.get("name", "").lower() not in html_lower
+        ]
+        missing_personas = [
+            persona.get("name", "")
+            for persona in product_spec.get("personas", [])
+            if persona.get("name") and persona.get("name", "").lower() not in html_lower
+        ]
+        missing_pain_points = [
+            persona.get("name", "")
+            for persona in product_spec.get("personas", [])
+            if persona.get("pain_point")
+            and not self._pain_point_present(persona.get("pain_point", ""), html_lower)
+        ]
+        has_cta = "start free trial" in html_lower
+
+        deterministic_issues = []
+        deterministic_strengths = []
+
+        if missing_features:
+            deterministic_issues.append(
+                f"Deterministic check: missing feature names in HTML: {', '.join(missing_features)}."
+            )
+        else:
+            deterministic_strengths.append("Deterministic check: all 5 feature names appear in the HTML.")
+
+        if missing_personas:
+            deterministic_issues.append(
+                f"Deterministic check: missing persona names in HTML: {', '.join(missing_personas)}."
+            )
+        else:
+            deterministic_strengths.append("Deterministic check: all persona names appear in the HTML.")
+
+        if missing_pain_points:
+            deterministic_issues.append(
+                "Deterministic check: persona pain points are not clearly represented for "
+                f"{', '.join(missing_pain_points)}."
+            )
+        else:
+            deterministic_strengths.append("Deterministic check: persona pain points are represented in the HTML.")
+
+        if not has_cta:
+            deterministic_issues.append("Deterministic check: CTA text 'Start Free Trial' is missing.")
+        else:
+            deterministic_strengths.append("Deterministic check: CTA text 'Start Free Trial' is present.")
+
+        reviewed["issues"] = deterministic_issues + reviewed["issues"]
+        reviewed["strengths"] = deterministic_strengths + reviewed["strengths"]
+
+        if deterministic_issues:
+            reviewed["verdict"] = "fail"
+        elif reviewed.get("verdict") == "fail":
+            llm_only_issues = [
+                issue for issue in reviewed["issues"]
+                if not issue.startswith("Deterministic check:")
+            ]
+            if not llm_only_issues:
+                reviewed["verdict"] = "pass"
+                reviewed["issues"] = []
+
+        return reviewed
+
+    def _pain_point_present(self, pain_point: str, html_lower: str) -> bool:
+        normalized_words = self._tokenize_meaningful_words(pain_point)
+        if not normalized_words:
+            return False
+
+        html_words = set(self._tokenize_meaningful_words(html_lower))
+        overlap = html_words.intersection(normalized_words)
+
+        # Accept paraphrases when enough of the core concepts appear.
+        min_required = min(3, max(2, len(normalized_words) // 4))
+        return len(overlap) >= min_required
+
+    def _tokenize_meaningful_words(self, text: str) -> list[str]:
+        stop_words = {
+            "a", "an", "and", "are", "as", "at", "be", "because", "by", "can", "currently",
+            "due", "for", "from", "has", "have", "he", "her", "him", "his", "if", "in", "into",
+            "is", "it", "its", "like", "means", "month", "monthly", "of", "often", "on", "or",
+            "per", "quarter", "she", "so", "spends", "that", "the", "their", "them", "they",
+            "this", "through", "to", "up", "uses", "using", "week", "with", "you"
+        }
+        words = re.findall(r"[a-zA-Z]{4,}", text.lower())
+        return [word for word in words if word not in stop_words]
